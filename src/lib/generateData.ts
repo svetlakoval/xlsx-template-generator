@@ -40,6 +40,23 @@ const issuerDistricts = [
 
 type Sex = 'male' | 'female'
 
+type PersonNameDefinitions = {
+  first_name?: Partial<Record<Sex | 'generic', string[]>>
+  last_name?: Partial<Record<Sex | 'generic', string[]>>
+  middle_name?: Partial<Record<Sex, string[]>>
+}
+
+const fakerDefinitions = faker as unknown as {
+  definitions?: { person?: PersonNameDefinitions }
+  rawDefinitions?: { person?: PersonNameDefinitions }
+}
+
+const getPersonNames = <T extends keyof PersonNameDefinitions>(
+  key: T,
+  sex: Sex,
+  fallback: string[],
+) => fakerDefinitions.definitions?.person?.[key]?.[sex] ?? fakerDefinitions.rawDefinitions?.person?.[key]?.[sex] ?? fallback
+
 type PersonData = {
   sex: Sex
   gender: 'М' | 'Ж'
@@ -156,15 +173,16 @@ type UniqueStore = Map<string, Set<string>>
 const padDatePart = (value: number) => String(value).padStart(2, '0')
 const formatDate = (date: Date) => `${padDatePart(date.getDate())}.${padDatePart(date.getMonth() + 1)}.${date.getFullYear()}`
 
-const getRowPerson = (rowIndex: number, rowContext: RowGenerationContext) => {
-  if (rowContext.person) return rowContext.person
+const createPerson = (rowIndex: number, sexOverride?: Sex): PersonData => {
+  const sex: Sex = sexOverride ?? (rowIndex % 2 === 0 ? 'male' : 'female')
+  const availableFirstNames = getPersonNames('first_name', sex, firstNames[sex])
+  const availableLastNames = getPersonNames('last_name', sex, lastNames.map((name) => name[sex]))
+  const availableMiddleNames = getPersonNames('middle_name', sex, middleNames[sex])
+  const firstName = pickByRow(availableFirstNames, rowIndex, sex === 'male' ? 2 : 5)
+  const lastName = pickByRow(availableLastNames, rowIndex, 3)
+  const middleName = pickByRow(availableMiddleNames, rowIndex, 7)
 
-  const sex: Sex = rowIndex % 2 === 0 ? 'male' : 'female'
-  const firstName = pickByRow(firstNames[sex], rowIndex, sex === 'male' ? 2 : 5)
-  const lastName = pickByRow(lastNames, rowIndex, 3)[sex]
-  const middleName = pickByRow(middleNames[sex], rowIndex, 7)
-
-  rowContext.person = {
+  return {
     sex,
     gender: sex === 'male' ? 'М' : 'Ж',
     firstName,
@@ -172,8 +190,20 @@ const getRowPerson = (rowIndex: number, rowContext: RowGenerationContext) => {
     middleName,
     fullName: `${lastName} ${firstName} ${middleName}`,
   }
+}
 
+const getRowPerson = (rowIndex: number, rowContext: RowGenerationContext) => {
+  if (rowContext.person) return rowContext.person
+
+  rowContext.person = createPerson(rowIndex)
   return rowContext.person
+}
+
+const createTextFromSamples = (column: ColumnConfig, rowIndex: number) => {
+  const samples = column.samples.map((sample) => sample.trim()).filter(Boolean)
+  if (!samples.length) return null
+  if (samples.some((sample) => /\d+/.test(sample))) return createSequentialValueFromSamples(column, rowIndex, samples[0])
+  return samples[rowIndex % samples.length]
 }
 
 const createTextValue = (column: ColumnConfig, rowIndex: number, rowContext: RowGenerationContext) => {
@@ -188,7 +218,7 @@ const createTextValue = (column: ColumnConfig, rowIndex: number, rowContext: Row
   if (isIssuerHeader(header)) return createIssuer(rowIndex)
   if (isBlankNumberHeader(header)) return createBlankNumberFromSamples(column, rowIndex)
 
-  return faker.lorem.words({ min: 2, max: 5 })
+  return createTextFromSamples(column, rowIndex) ?? faker.lorem.words({ min: 2, max: 5 })
 }
 
 const parseDateInput = (value?: string, fallback?: Date) => {
@@ -269,7 +299,25 @@ const withUnique = (
     }
   }
 
-  return createValue(0)
+  const fallbackValue = createValue(seen.size + 100)
+  seen.add(valueToKey(fallbackValue))
+  return fallbackValue
+}
+
+const makeUniquePersonValue = (
+  column: ColumnConfig,
+  uniqueStore: UniqueStore,
+  rowIndex: number,
+  rowContext: RowGenerationContext,
+  createValue: (person: PersonData) => string,
+) => {
+  const value = createValue(getRowPerson(rowIndex, rowContext))
+  if (!column.unique) return value
+
+  const seen = uniqueStore.get(column.id) ?? new Set<string>()
+  uniqueStore.set(column.id, seen)
+  seen.add(valueToKey(value))
+  return value
 }
 
 export const generateValue = (
@@ -293,13 +341,21 @@ export const generateValue = (
     case 'phone':
       return withUnique(column, uniqueStore, () => createPhoneNumber())
     case 'fullName':
-      return getRowPerson(rowIndex, rowContext).fullName
+      return column.unique
+        ? makeUniquePersonValue(column, uniqueStore, rowIndex, rowContext, (person) => person.fullName)
+        : getRowPerson(rowIndex, rowContext).fullName
     case 'firstName':
-      return getRowPerson(rowIndex, rowContext).firstName
+      return column.unique
+        ? makeUniquePersonValue(column, uniqueStore, rowIndex, rowContext, (person) => person.firstName)
+        : getRowPerson(rowIndex, rowContext).firstName
     case 'lastName':
-      return getRowPerson(rowIndex, rowContext).lastName
+      return column.unique
+        ? makeUniquePersonValue(column, uniqueStore, rowIndex, rowContext, (person) => person.lastName)
+        : getRowPerson(rowIndex, rowContext).lastName
     case 'middleName':
-      return getRowPerson(rowIndex, rowContext).middleName
+      return column.unique
+        ? makeUniquePersonValue(column, uniqueStore, rowIndex, rowContext, (person) => person.middleName)
+        : getRowPerson(rowIndex, rowContext).middleName
     case 'gender':
       return getRowPerson(rowIndex, rowContext).gender
     case 'company':
