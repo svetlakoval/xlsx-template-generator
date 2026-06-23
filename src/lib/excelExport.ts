@@ -28,12 +28,14 @@ const copyCellFormatting = (sourceCell: ExcelJS.Cell, targetCell: ExcelJS.Cell) 
   const fill = cloneValue(sourceCell.fill)
   const font = cloneValue(sourceCell.font)
   const protection = cloneValue(sourceCell.protection)
+  const note = cloneValue(sourceCell.note)
 
   if (alignment) targetCell.alignment = alignment
   if (border) targetCell.border = border
   if (fill) targetCell.fill = fill
   if (font) targetCell.font = font
   if (protection) targetCell.protection = protection
+  if (note) targetCell.note = note
 }
 
 const copyRowFormatting = (sourceRow: ExcelJS.Row, targetRow: ExcelJS.Row, maxColumn: number) => {
@@ -106,10 +108,17 @@ export const generateWorkbook = async (templateWorkbook: ExcelJS.Workbook, confi
   copyMergedCells(sourceWorksheet, worksheet, config.headerRowNumber)
 
   const uniqueStore = new Map<string, Set<string>>()
+  const ignoredRowNumbers = new Set(config.ignoredRowNumbers)
 
   for (let rowIndex = 0; rowIndex < config.rowsCount; rowIndex += 1) {
     const rowNumber = dataStartRowNumber + rowIndex
     const row = worksheet.getRow(rowNumber)
+
+    if (ignoredRowNumbers.has(rowNumber)) {
+      copyRowWithValues(sourceWorksheet.getRow(rowNumber), row, maxColumn)
+      continue
+    }
+
     copyRowFormatting(templateRow, row, maxColumn)
 
     const rowContext: RowGenerationContext = {}
